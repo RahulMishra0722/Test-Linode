@@ -1,71 +1,52 @@
-export type GamePattern = {
-  name: string;
-  sequence: number[];
-  secretRule: string;
-  solution: number[];
+export type GridObstacle = {
+  lane: number;
+  type: 'wall' | 'core';
+  id: string;
 };
 
-const PATTERNS = [
-  {
-    name: 'Linear Echo',
-    generate: () => {
-      const start = Math.floor(Math.random() * 10) + 1;
-      const step = Math.floor(Math.random() * 5) + 2;
-      return {
-        sequence: [start, start + step, start + step * 2],
-        solution: [start + step * 3, start + step * 4],
-        secretRule: `Add ${step} each time`,
-      };
-    },
-  },
-  {
-    name: 'Binary Pulse',
-    generate: () => {
-      const start = Math.pow(2, Math.floor(Math.random() * 3) + 1);
-      return {
-        sequence: [start, start * 2, start * 4],
-        solution: [start * 8, start * 16],
-        secretRule: 'Double the previous number',
-      };
-    },
-  },
-  {
-    name: 'Square Wave',
-    generate: () => {
-      const start = Math.floor(Math.random() * 4) + 1;
-      return {
-        sequence: [
-          start * start,
-          (start + 1) * (start + 1),
-          (start + 2) * (start + 2),
-        ],
-        solution: [(start + 3) * (start + 3), (start + 4) * (start + 4)],
-        secretRule: 'Consecutive squares',
-      };
-    },
-  },
-  {
-    name: 'Prime Jump',
-    generate: () => {
-      const primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
-      const startIdx = Math.floor(Math.random() * (primes.length - 5));
-      return {
-        sequence: [
-          primes[startIdx],
-          primes[startIdx + 1],
-          primes[startIdx + 2],
-        ],
-        solution: [primes[startIdx + 3], primes[startIdx + 4]],
-        secretRule: 'Next prime number',
-      };
-    },
-  },
-];
+export type GridWave = {
+  id: string;
+  obstacles: GridObstacle[];
+  speed: number;
+};
 
-export function generateGame(): GamePattern {
-  const patternType = PATTERNS[Math.floor(Math.random() * PATTERNS.length)];
+export function generateWave(level: number): GridWave {
+  const numObstacles = Math.min(Math.floor(level / 2) + 1, 3);
+  const obstacles: GridObstacle[] = [];
+  const usedLanes = new Set<number>();
+
+  // Add obstacles (walls)
+  for (let i = 0; i < numObstacles; i++) {
+    let lane;
+    do {
+      lane = Math.floor(Math.random() * 3); // 0, 1, 2
+    } while (usedLanes.has(lane));
+
+    usedLanes.add(lane);
+    obstacles.push({
+      lane,
+      type: 'wall',
+      id: Math.random().toString(36).substring(7),
+    });
+  }
+
+  // Add an energy core in an empty lane if possible
+  if (usedLanes.size < 3) {
+    let lane;
+    do {
+      lane = Math.floor(Math.random() * 3);
+    } while (usedLanes.has(lane));
+
+    obstacles.push({
+      lane,
+      type: 'core',
+      id: 'core-' + Math.random().toString(36).substring(7),
+    });
+  }
+
   return {
-    name: patternType.name,
-    ...patternType.generate(),
+    id: 'wave-' + Math.random().toString(36).substring(7),
+    obstacles,
+    speed: 1 + level * 0.1,
   };
 }

@@ -3,35 +3,28 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { sessionId, guesses } = await req.json();
-
+    const { sessionId, lane } = await req.json();
     const game = activeGames.get(sessionId);
 
     if (!game) {
-      return NextResponse.json(
-        { error: 'Session expired or invalid' },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: 'Session expired' }, { status: 400 });
     }
 
-    const isCorrect =
-      guesses.length === game.solution.length &&
-      guesses.every(
-        (val: any, idx: number) => Number(val) === game.solution[idx],
-      );
+    // Checking if the player reached the core lane
+    const isCorrect = game.solution.includes(lane);
 
     if (isCorrect) {
       activeGames.delete(sessionId);
       return NextResponse.json({
         success: true,
-        message: 'Neural Pattern Matched!',
-        secretRule: game.secretRule,
+        message: 'CORE SYNCED',
+        bonus: 100,
       });
     }
 
     return NextResponse.json({
       success: false,
-      message: 'Sequence Mismatch Detected.',
+      message: 'SYSTEM COLLISION',
     });
   } catch (e) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
