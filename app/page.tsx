@@ -1,206 +1,187 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { calculateLaserPath, type Level, type Mirror } from "@/lib/game-engine";
 import { cn } from "@/lib/utils";
-import confetti from "canvas-confetti";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  Activity,
-  AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
-  Cpu,
-  Terminal,
+  AlertCircle,
+  Sparkles,
+  Trophy,
   Zap
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
-type Obstacle = { lane: number, type: 'wall' | 'core', id: string };
-type Wave = { id: string, obstacles: Obstacle[], speed: number };
-
-export default function SynthGrid() {
-  const [status, setStatus] = useState<'IDLE' | 'SYNCING' | 'ACTIVE' | 'COLLISION' | 'SUCCESS'>('IDLE');
-  const [level, setLevel] = useState(1);
-  const [score, setScore] = useState(0);
-  const [lane, setLane] = useState(1); // 0, 1, 2
-  const [currentWave, setCurrentWave] = useState<Wave | null>(null);
+export default function PrismGame() {
+  const [status, setStatus] = useState<'IDLE' | 'SYNCING' | 'ACTIVE' | 'WON' | 'LOST'>('IDLE');
+  const [levelData, setLevelData] = useState<Level | null>(null);
   const [sessionId, setSessionId] = useState<string>("");
+  const [userMirrors, setUserMirrors] = useState<Mirror[]>([]);
+  const [laserPath, setLaserPath] = useState<{ x: number, y: number }[]>([]);
+  const [score, setScore] = useState(0);
   const [message, setMessage] = useState("");
 
-  const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
-
-  const fetchWave = useCallback(async (currentLevel: number, sid: string) => {
+  const startNewLevel = useCallback(async () => {
+    setStatus('SYNCING');
     try {
-      const res = await fetch(`/api/game/start?level=${currentLevel}&sessionId=${sid}`);
+      const res = await fetch("/api/game/start");
       const data = await res.json();
-      setCurrentWave(data.wave);
+      setLevelData(data.level);
       setSessionId(data.sessionId);
+      setUserMirrors(data.level.mirrors);
       setStatus('ACTIVE');
-    } catch (e) {
-      setMessage("LINK INTERRUPTED");
+    } catch (err) {
+      setMessage("Session generation failed.");
       setStatus('IDLE');
     }
   }, []);
 
-  const startGame = () => {
-    setLevel(1);
-    setScore(0);
-    setLane(1);
+  const rotateMirror = (id: string) => {
+    if (status !== 'ACTIVE') return;
+    setUserMirrors(prev => prev.map(m =>
+      m.id === id ? { ...m, rotation: (m.rotation + 45) % 180 } : m
+    ));
+  };
+
+  const currentPath = useMemo(() => {
+    if (!levelData) return [];
+    return calculateLaserPath(levelData, userMirrors);
+  }, [levelData, userMirrors]);
+
+  const validateSolution = async () => {
+    if (!sessionId) return;
     setStatus('SYNCING');
-    fetchWave(1, "");
-  };
-
-  const moveLane = (dir: 'L' | 'R') => {
-    if (status !== 'ACTIVE') return;
-    if (dir === 'L' && lane > 0) setLane(lane - 1);
-    if (dir === 'R' && lane < 2) setLane(lane + 1);
-  };
-
-  const handleWaveEnd = async () => {
-    if (status !== 'ACTIVE') return;
-
-    const core = currentWave?.obstacles.find(o => o.type === 'core');
-    const wallCollision = currentWave?.obstacles.some(o => o.type === 'wall' && o.lane === lane);
-
-    if (wallCollision) {
-      setStatus('COLLISION');
-      setMessage("SYSTEM CRITICAL: COLLISION DETECTED");
-      return;
-    }
-
-    if (core && core.lane === lane) {
-      setScore(s => s + 100);
-      setStatus('SUCCESS');
-      confetti({
-        particleCount: 100,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#00f3ff', '#ff00ff']
+    try {
+      const res = await fetch("/api/game/validate", {
+        method: "POST",
+        body: JSON.stringify({ sessionId, mirrors: userMirrors })
       });
-      setTimeout(() => {
-        const nextLevel = level + 1;
-        setLevel(nextLevel);
-        setStatus('SYNCING');
-        fetchWave(nextLevel, sessionId);
-      }, 1500);
-    } else {
-      // Missed core but didn't hit wall
-      setStatus('SUCCESS');
-      setTimeout(() => {
-        const nextLevel = level + 1;
-        setLevel(nextLevel);
-        setStatus('SYNCING');
-        fetchWave(nextLevel, sessionId);
-      }, 1000);
+      const data = await res.json();
+      if (data.success) {
+        setScore(s => s + 100);
+        setStatus('WON');
+      } else {
+        setMessage(data.message);
+        setStatus('LOST');
+      }
+    } catch (err) {
+      setMessage("Validation service error.");
+      setStatus('ACTIVE');
     }
   };
 
-  // Keyboard controls
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') moveLane('L');
-      if (e.key === 'ArrowRight') moveLane('R');
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [lane, status]);
+  const getLinePoints = (path: { x: number, y: number }[]) => {
+    return path.map(p => `${p.x * 60 + 30},${p.y * 60 + 30}`).join(" ");
+  };
 
   return (
-    <main className="min-h-screen relative flex items-center justify-center p-6 crt-flicker">
-      <div className="scanline" />
+    <main className="min-h-screen bg-[#02040a] text-zinc-100 p-6 flex items-center justify-center font-sans grid-background select-none">
+      <div className="scanlines" />
 
-      {/* 3D Grid Effects */}
-      <div className="fixed inset-0 pointer-events-none opacity-20">
-        <div className="grid-floor absolute inset-0 bottom-[-50%] top-1/2" />
-        <div className="grid-floor absolute inset-0 top-[-50%] bottom-1/2 rotate-180" />
+      {/* Background Orbs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none opacity-20">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/10 blur-[120px] rounded-full" />
       </div>
 
-      <div className="max-w-4xl w-full relative z-10 flex flex-col gap-8">
+      <div className="max-w-xl w-full relative z-10 flex flex-col gap-8">
 
         {/* HUD */}
-        <div className="flex justify-between items-center px-4 bg-white/5 border border-white/10 rounded-2xl p-4 backdrop-blur-md">
+        <div className="flex justify-between items-center glass-morphism p-4 rounded-3xl">
           <div className="flex flex-col">
-            <span className="text-[10px] text-neon-blue font-bold uppercase tracking-widest">System Level</span>
-            <span className="text-2xl font-black neon-text">v0.{level}</span>
+            <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none mb-1">Prism Protocol</span>
+            <span className="text-xl font-bold tracking-tight">Active Matrix</span>
           </div>
 
-          <div className="flex flex-col items-center">
-            <div className="flex items-center gap-2 mb-1">
-              <Activity className="w-3 h-3 text-neon-pink animate-pulse" />
-              <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Neural Link</span>
+          <div className="flex items-center gap-4">
+            <div className="flex flex-col items-center">
+              <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-none mb-1">Score</span>
+              <span className="text-xl font-mono">{score}</span>
             </div>
-            <Badge variant="outline" className="text-[10px] border-neon-blue/30 text-neon-blue uppercase px-3 py-1 bg-neon-blue/5">
-              {status}
-            </Badge>
-          </div>
-
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] text-neon-pink font-bold uppercase tracking-widest">Score Pulse</span>
-            <span className="text-2xl font-black neon-text text-neon-pink">{score}</span>
+            <Trophy className="w-5 h-5 text-amber-500" />
           </div>
         </div>
 
-        {/* Main Stage */}
-        <div className="relative h-[400px] md:h-[500px] w-full bg-black/40 border-y border-white/10 overflow-hidden flex perspective-[1000px]">
+        {/* Board */}
+        <div className="relative aspect-square glass-morphism rounded-3xl overflow-hidden p-6 flex items-center justify-center bg-black/20">
 
-          {/* Lanes */}
-          {[0, 1, 2].map(i => (
-            <div key={i} className={cn(
-              "flex-1 border-x border-white/5 relative",
-              lane === i && "bg-neon-blue/5"
-            )}>
-              {/* Lane Indicator */}
-              {lane === i && (
-                <motion.div
-                  layoutId="player"
-                  className="absolute bottom-12 left-1/2 -translate-x-1/2 w-12 h-12"
-                >
-                  <div className="w-full h-full neon-border rounded-xl bg-neon-blue/10 flex items-center justify-center">
-                    <Zap className="w-6 h-6 text-neon-blue animate-pulse" />
-                  </div>
-                  <div className="absolute top-full left-1/2 -translate-x-1/2 w-8 h-2 bg-neon-blue/40 blur-md rounded-full mt-2" />
-                </motion.div>
-              )}
-            </div>
-          ))}
+          {/* Grid Layout */}
+          <div className="grid grid-cols-5 grid-rows-5 gap-0 relative w-full h-full border border-white/5 bg-white/[0.02]">
+            {Array.from({ length: 25 }).map((_, i) => (
+              <div key={i} className="border border-white/5 opacity-50" />
+            ))}
 
-          {/* Active Wave */}
-          <AnimatePresence>
-            {status === 'ACTIVE' && currentWave && (
+            {/* Laser SVG Layer */}
+            <svg
+              className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
+              viewBox="0 0 300 300"
+            >
+              <defs>
+                <filter id="laser-glow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="3" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+              <polyline
+                points={getLinePoints(currentPath)}
+                fill="none"
+                stroke="#00ff80"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                filter="url(#laser-glow)"
+                className="animate-laser"
+              />
+            </svg>
+
+            {/* Source */}
+            {levelData && (
               <motion.div
-                key={currentWave.id}
-                initial={{ y: -500, opacity: 0 }}
-                animate={{ y: 600, opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{
-                  duration: Math.max(0.5, 2 - (level * 0.1)),
-                  ease: "linear"
-                }}
-                onAnimationComplete={handleWaveEnd}
-                className="absolute inset-x-0 h-full pointer-events-none"
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                style={{ gridColumnStart: levelData.source.position.x + 1, gridRowStart: levelData.source.position.y + 1 }}
+                className="flex items-center justify-center z-10 relative pointer-events-none"
               >
-                {currentWave.obstacles.map(o => (
-                  <div
-                    key={o.id}
-                    className="absolute h-12"
-                    style={{
-                      left: `${(o.lane * 33.33) + 16.66}%`,
-                      transform: 'translateX(-50%)'
-                    }}
-                  >
-                    {o.type === 'wall' ? (
-                      <div className="w-20 h-8 bg-neon-pink/40 border-2 border-neon-pink rounded-lg shadow-[0_0_20px_#ff00ff]" />
-                    ) : (
-                      <div className="w-12 h-12 bg-neon-purple/40 border-2 border-neon-purple rounded-full shadow-[0_0_20px_#bc13fe] flex items-center justify-center animate-spin-slow">
-                        <Cpu className="w-5 h-5 text-neon-purple" />
-                      </div>
-                    )}
-                  </div>
-                ))}
+                <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center node-glow">
+                  <Zap className="w-5 h-5 text-emerald-400" />
+                </div>
               </motion.div>
             )}
-          </AnimatePresence>
+
+            {/* Target */}
+            {levelData && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                style={{ gridColumnStart: levelData.target.position.x + 1, gridRowStart: levelData.target.position.y + 1 }}
+                className="flex items-center justify-center z-10 relative pointer-events-none"
+              >
+                <div className="w-12 h-12 rounded-xl bg-purple-500/20 border-2 border-dashed border-purple-500/50 flex items-center justify-center animate-pulse">
+                  <div className="w-4 h-4 rounded-full bg-purple-400 blur-[2px]" />
+                </div>
+              </motion.div>
+            )}
+
+            {/* User Mirrors */}
+            {userMirrors.map(m => (
+              <motion.div
+                key={m.id}
+                style={{ gridColumnStart: m.position.x + 1, gridRowStart: m.position.y + 1 }}
+                className="flex items-center justify-center z-20"
+              >
+                <motion.div
+                  onClick={() => rotateMirror(m.id)}
+                  animate={{ rotate: m.rotation }}
+                  whileHover={{ scale: 1.1, backgroundColor: "rgba(255, 255, 255, 0.1)" }}
+                  whileTap={{ scale: 0.9 }}
+                  className="w-12 h-12 glass-morphism rounded-xl cursor-pointer flex items-center justify-center group overflow-hidden border-white/20"
+                >
+                  <div className="w-[80%] h-1 bg-white/40 group-hover:bg-white/80 transition-colors shadow-[0_0_10px_white]" />
+                  <div className="absolute inset-0 bg-blue-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </motion.div>
+              </motion.div>
+            ))}
+          </div>
 
           {/* Overlays */}
           <AnimatePresence>
@@ -208,70 +189,68 @@ export default function SynthGrid() {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+                className="absolute inset-0 z-50 flex items-center justify-center bg-[#02040a]/80 backdrop-blur-xl"
               >
-                <div className="text-center space-y-6">
-                  <h1 className="text-6xl font-black italic tracking-tighter text-white neon-text mb-2">SYNTH-GRID</h1>
-                  <p className="text-neon-blue/60 text-xs font-bold uppercase tracking-widest">NEURAL INTERFACE INITIALIZED</p>
+                <div className="text-center space-y-8 p-12">
+                  <h1 className="text-5xl font-black italic tracking-tighter text-white uppercase bg-gradient-to-br from-white to-zinc-600 bg-clip-text text-transparent">PRISM</h1>
+                  <p className="text-zinc-500 text-sm font-medium tracking-wide uppercase">Crystal Alignment Required</p>
                   <Button
-                    onClick={startGame}
-                    className="rounded-none border-2 border-neon-blue bg-transparent hover:bg-neon-blue hover:text-black transition-all px-12 py-8 text-xl font-black uppercase tracking-widest italic"
+                    size="lg"
+                    onClick={startNewLevel}
+                    className="rounded-none border-2 border-white bg-white text-[#02040a] hover:bg-transparent hover:text-white transition-all px-12 py-8 text-xl font-black uppercase italic"
                   >
-                    SYNC LINK
+                    Initiate
                   </Button>
                 </div>
               </motion.div>
             )}
 
-            {status === 'COLLISION' && (
+            {(status === 'WON' || status === 'LOST') && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="absolute inset-0 z-50 flex items-center justify-center bg-red-950/90 backdrop-blur-md"
+                className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md"
               >
-                <div className="text-center space-y-6 max-w-sm px-6">
-                  <AlertTriangle className="w-16 h-16 text-red-500 mx-auto animate-bounce" />
-                  <h1 className="text-3xl font-black text-red-500 uppercase tracking-tighter">DATA CRASH</h1>
-                  <p className="text-red-400/60 text-xs font-mono">{message}</p>
-                  <div className="flex flex-col gap-3">
-                    <Button
-                      onClick={startGame}
-                      className="rounded-none border-2 border-red-500 bg-red-500 text-white hover:bg-white hover:text-red-500 transition-all py-6 font-black uppercase"
-                    >
-                      REBOOT SYSTEM
-                    </Button>
-                    <span className="text-[10px] text-red-500/40 font-bold uppercase">Final Score: {score}</span>
-                  </div>
+                <div className="text-center p-8 glass-morphism rounded-3xl space-y-6">
+                  {status === 'WON' ? (
+                    <Sparkles className="w-12 h-12 text-emerald-400 mx-auto" />
+                  ) : (
+                    <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
+                  )}
+                  <h2 className={cn("text-2xl font-black uppercase tracking-tight", status === 'WON' ? "text-emerald-400" : "text-red-400")}>
+                    {status === 'WON' ? "Alignment Complete" : "Matrix Collision"}
+                  </h2>
+                  <p className="text-zinc-500 text-sm">{status === 'WON' ? "Signal synchronized with Node A-7." : message}</p>
+                  <Button
+                    onClick={startNewLevel}
+                    className="w-full py-6 rounded-2xl bg-white text-black font-black uppercase"
+                  >
+                    New Sequence
+                  </Button>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        {/* Controls Hint */}
-        <div className="flex justify-between items-center opacity-40 group hover:opacity-100 transition-opacity">
-          <div className="flex gap-4">
-            <div className="flex flex-col items-center gap-1">
-              <div className="w-10 h-10 border border-white/20 rounded flex items-center justify-center bg-white/5">
-                <ChevronLeft className="w-4 h-4" />
-              </div>
-              <span className="text-[8px] font-bold uppercase text-zinc-500 tracking-tighter">Move Left</span>
-            </div>
-            <div className="flex flex-col items-center gap-1">
-              <div className="w-10 h-10 border border-white/20 rounded flex items-center justify-center bg-white/5">
-                <ChevronRight className="w-4 h-4" />
-              </div>
-              <span className="text-[8px] font-bold uppercase text-zinc-500 tracking-tighter">Move Right</span>
-            </div>
-          </div>
-
-          <div className="text-right flex flex-col items-end gap-1">
-            <Terminal className="w-4 h-4 text-neon-blue" />
-            <span className="text-[8px] font-bold uppercase text-zinc-500 tracking-tighter leading-none">
-              Logic: Bun Serverless + React Framer<br />
-              Host: Linode Cloud Node v4.2
+        {/* Footer / Controls */}
+        <div className="flex flex-col gap-4">
+          <div className="flex justify-between items-center text-zinc-600 px-2">
+            <span className="text-[10px] font-bold uppercase tracking-widest">Controls // Rotate: Click Node</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest leading-none text-right">
+              Linode Sync Engine v1<br />
+              Serverless Auth Active
             </span>
           </div>
+          {status === 'ACTIVE' && (
+            <Button
+              onClick={validateSolution}
+              size="lg"
+              className="h-16 rounded-3xl bg-blue-600 hover:bg-blue-500 text-white font-black uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] border border-blue-400/20"
+            >
+              Verify Alignment
+            </Button>
+          )}
         </div>
 
       </div>
